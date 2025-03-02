@@ -1,0 +1,157 @@
+import itertools
+import random
+
+class Game:
+    def __init__(self):
+        self.players = set()
+        self.rounds = []
+        self.previous_groups = []
+    
+    def enter_groups(self):
+        """Prompt user to enter player groups."""
+        groups = []
+        while True:
+            group_input = input("Enter player numbers for a group (8 digits for 4 players, 6 digits for 3 players), or type 'done': ")
+            if group_input.lower() == 'done':
+                break
+            if len(group_input) in [6, 8] and group_input.isdigit():
+                group = [group_input[i:i+2] for i in range(0, len(group_input), 2)]
+                groups.append(group)
+                self.players.update(group)
+            else:
+                print("Invalid input. Please enter a valid group format.")
+        self.previous_groups.append(groups)
+        return groups
+    
+    def enter_scores(self, groups):
+        """Prompt user to enter scorecards, automatically assigning them based on player number."""
+        scores = {}
+        expected_lengths = {3: 10, 4: 14}
+        players_in_groups = set(itertools.chain(*groups))
+        
+        while len(scores) < len(players_in_groups):
+            score_input = input("Enter a scorecard: ")
+            if len(score_input) in expected_lengths.values() and score_input.isdigit():
+                scorer = score_input[:2]
+                if scorer in players_in_groups and scorer not in scores:
+                    scores[scorer] = score_input
+                else:
+                    print("Invalid or duplicate scorecard.")
+            else:
+                print("Invalid score format. Try again.")
+        
+        return scores
+    
+    def process_scores(self, scores):
+        """Calculate total scores from entered scorecards."""
+        player_scores = {player: {'share': 0, 'reply': 0} for player in self.players}
+        for scorecard in scores.values():
+            scorer = scorecard[:2]
+            share_ranks = scorecard[2:8] if len(scorecard) == 14 else scorecard[2:6]
+            reply_ranks = scorecard[8:] if len(scorecard) == 14 else scorecard[6:]
+            
+            for i, player in enumerate([share_ranks[j:j+2] for j in range(0, len(share_ranks), 2)]):
+                player_scores[player]['share'] += 3 - i
+            
+            for i, player in enumerate([reply_ranks[j:j+2] for j in range(0, len(reply_ranks), 2)]):
+                player_scores[player]['reply'] += 3 - i
+        
+        return player_scores
+    
+    def display_scoreboard(self, player_scores):
+        """Display the scoreboard sorted by total score."""
+        sorted_players = sorted(player_scores.items(), key=lambda x: x[1]['share'] + x[1]['reply'], reverse=True)
+        print("\nSCOREBOARD:")
+        print("Player | Share | Reply | Total")
+        print("---------------------------------")
+        for player, scores in sorted_players:
+            total = scores['share'] + scores['reply']
+            print(f"{player}   |   {scores['share']}   |   {scores['reply']}   |   {total}")
+    
+    def recombine_groups(self):
+        """Generate new groups to maximize diversity by ensuring minimal repeat pairings."""
+        all_players = list(self.players)
+        previous_pairings = set()
+        for group in itertools.chain(*self.previous_groups):
+            for pair in itertools.combinations(group, 2):
+                previous_pairings.add(frozenset(pair))
+        
+        random.shuffle(all_players)
+        new_groups = []
+        while all_players:
+            best_group = None
+            best_score = float('inf')
+            for group in itertools.combinations(all_players, 4 if len(all_players) >= 4 else 3):
+                score = sum(frozenset(pair) in previous_pairings for pair in itertools.combinations(group, 2))
+                if score < best_score:
+                    best_score = score
+                    best_group = group
+            
+            for player in best_group:
+                all_players.remove(player)
+            new_groups.append(list(best_group))
+        
+        return new_groups
+    
+    def edit_scores(self, scores):
+        """Allow user to edit any scorecard."""
+        while True:
+            edit_player = input("Enter player number to edit (or type 'done' to finish): ")
+            if edit_player.lower() == 'done':
+                break
+            if edit_player in scores:
+                new_score = input(f"Enter new scorecard for player {edit_player}: ")
+                expected_length = 14 if len(scores[edit_player]) == 14 else 10
+                if len(new_score) == expected_length and new_score[:2] == edit_player:
+                    scores[edit_player] = new_score
+                    print(f"Score updated for player {edit_player}.")
+                else:
+                    print("Invalid score format.")
+            else:
+                print("Player not found.")
+        return scores
+    
+    def run_game(self):
+        """Main loop to run rounds of the game."""
+        while True:
+            groups = self.enter_groups()
+            if not groups:
+                print("No groups entered. Exiting game.")
+                break
+            
+            scores = self.enter_scores(groups)
+            player_scores = self.process_scores(scores)
+            self.rounds.append(player_scores)
+            self.display_scoreboard(player_scores)
+            
+            while True:
+                action = input("Enter 'n' to continue to next round, 'e' to edit scores, or 'q' to quit: ")
+                if action == 'e':
+                    scores = self.edit_scores(scores)
+                    player_scores = self.process_scores(scores)
+                    self.display_scoreboard(player_scores)
+                elif action == 'n':
+                    break
+                elif action == 'q':
+                    return
+                else:
+                    print("Invalid input.")
+            
+            new_groups = self.recombine_groups()
+            print("Proposed new groups:")
+            for group in new_groups:
+                print(" ".join(group))
+            
+            approval = input("Enter 'y' to accept or 'm' to manually enter groups: ")
+            if approval == 'm':
+                self.players.clear()
+                groups = self.enter_groups()
+                if not groups:
+                    print("No groups entered. Exiting game.")
+                    break
+            else:
+                groups = new_groups
+            
+if __name__ == "__main__":
+    game = Game()
+    game.run_game()
