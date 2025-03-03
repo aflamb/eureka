@@ -1,156 +1,125 @@
 import itertools
 import random
+import pandas as pd
 
 class Game:
     def __init__(self):
         self.players = set()
         self.rounds = []
         self.previous_groups = []
+        self.initialized = False
+        self.scores = {}
     
     def enter_groups(self):
-        """Prompt user to enter player groups."""
+        """Prompt user to enter player groups, ensuring no new players are added after the first round and no duplicate player entries."""
         groups = []
+        entered_players = set()
+        
         while True:
             group_input = input("Enter player numbers for a group (8 digits for 4 players, 6 digits for 3 players), or type 'done': ")
             if group_input.lower() == 'done':
+                if self.initialized and set(itertools.chain(*groups)) != self.players:
+                    print("Error: Not all players have been grouped. Please complete all groups.")
+                    continue
                 break
             if len(group_input) in [6, 8] and group_input.isdigit():
                 group = [group_input[i:i+2] for i in range(0, len(group_input), 2)]
+                
+                # Check for duplicate player entries in the same round
+                if any(player in entered_players for player in group):
+                    print("Error: A player cannot be in more than one group in the same round.")
+                    continue
+                
+                if self.initialized and any(player not in self.players for player in group):
+                    print("Error: New players cannot be added after the first round.")
+                    continue
+                
                 groups.append(group)
+                entered_players.update(group)
                 self.players.update(group)
             else:
                 print("Invalid input. Please enter a valid group format.")
+        
         self.previous_groups.append(groups)
         return groups
     
-    def enter_scores(self, groups):
-        """Prompt user to enter scorecards, automatically assigning them based on player number."""
-        scores = {}
-        expected_lengths = {3: 10, 4: 14}
-        players_in_groups = set(itertools.chain(*groups))
+    def process_scores(self):
+        """Calculate total scores from entered scorecards and apply fairness scaling for 3-player groups."""
+        previous_scores = self.rounds[-1] if self.rounds else {player: {'share': 0, 'reply': 0} for player in self.players}
+        player_scores = {player: {'share': previous_scores[player]['share'], 'reply': previous_scores[player]['reply']} for player in self.players}
+        round_scores = {player: {'share': 0, 'reply': 0} for player in self.players}  # Track only this round's scores
+        group_sizes = {player: 4 for player in self.players}  # Default size is 4
         
-        while len(scores) < len(players_in_groups):
-            score_input = input("Enter a scorecard: ")
-            if len(score_input) in expected_lengths.values() and score_input.isdigit():
-                scorer = score_input[:2]
-                if scorer in players_in_groups and scorer not in scores:
-                    scores[scorer] = score_input
-                else:
-                    print("Invalid or duplicate scorecard.")
-            else:
-                print("Invalid score format. Try again.")
+        for group in self.previous_groups[-1]:
+            if len(group) == 3:
+                for player in group:
+                    group_sizes[player] = 3  # Mark players in a 3-player group
         
-        return scores
-    
-    def process_scores(self, scores):
-        """Calculate total scores from entered scorecards."""
-        player_scores = {player: {'share': 0, 'reply': 0} for player in self.players}
-        for scorecard in scores.values():
+        reply_votes = {player: 0 for player in self.players}  # Track reply votes
+        
+        for scorecard in self.scores.values():
             scorer = scorecard[:2]
             share_ranks = scorecard[2:8] if len(scorecard) == 14 else scorecard[2:6]
             reply_ranks = scorecard[8:] if len(scorecard) == 14 else scorecard[6:]
             
             for i, player in enumerate([share_ranks[j:j+2] for j in range(0, len(share_ranks), 2)]):
                 player_scores[player]['share'] += 3 - i
+                round_scores[player]['share'] += 3 - i
             
-            for i, player in enumerate([reply_ranks[j:j+2] for j in range(0, len(reply_ranks), 2)]):
-                player_scores[player]['reply'] += 3 - i
-        
-        return player_scores
-    
-    def display_scoreboard(self, player_scores):
-        """Display the scoreboard sorted by total score."""
-        sorted_players = sorted(player_scores.items(), key=lambda x: x[1]['share'] + x[1]['reply'], reverse=True)
-        print("\nSCOREBOARD:")
-        print("Player | Share | Reply | Total")
-        print("---------------------------------")
-        for player, scores in sorted_players:
-            total = scores['share'] + scores['reply']
-            print(f"{player}   |   {scores['share']}   |   {scores['reply']}   |   {total}")
-    
-    def recombine_groups(self):
-        """Generate new groups to maximize diversity by ensuring minimal repeat pairings."""
-        all_players = list(self.players)
-        previous_pairings = set()
-        for group in itertools.chain(*self.previous_groups):
-            for pair in itertools.combinations(group, 2):
-                previous_pairings.add(frozenset(pair))
-        
-        random.shuffle(all_players)
-        new_groups = []
-        while all_players:
-            best_group = None
-            best_score = float('inf')
-            for group in itertools.combinations(all_players, 4 if len(all_players) >= 4 else 3):
-                score = sum(frozenset(pair) in previous_pairings for pair in itertools.combinations(group, 2))
-                if score < best_score:
-                    best_score = score
-                    best_group = group
+            reply_point_values = [3, 2, 1] if len(reply_ranks) == 6 else [3, 2]
+            ranked_players = [reply_ranks[j:j+2] for j in range(0, len(reply_ranks), 2)]
             
-            for player in best_group:
-                all_players.remove(player)
-            new_groups.append(list(best_group))
+            for i, player in enumerate(ranked_players):
+                if i < len(reply_point_values):
+                    player_scores[player]['reply'] += reply_point_values[i]
+                    round_scores[player]['reply'] += reply_point_values[i]
+                    reply_votes[player] += 1
         
-        return new_groups
-    
-    def edit_scores(self, scores):
-        """Allow user to edit any scorecard."""
-        while True:
-            edit_player = input("Enter player number to edit (or type 'done' to finish): ")
-            if edit_player.lower() == 'done':
-                break
-            if edit_player in scores:
-                new_score = input(f"Enter new scorecard for player {edit_player}: ")
-                expected_length = 14 if len(scores[edit_player]) == 14 else 10
-                if len(new_score) == expected_length and new_score[:2] == edit_player:
-                    scores[edit_player] = new_score
-                    print(f"Score updated for player {edit_player}.")
-                else:
-                    print("Invalid score format.")
-            else:
-                print("Player not found.")
-        return scores
+        # Ensure all players receive at least the correct minimum reply points
+        for player in self.players:
+            if reply_votes[player] == 0:
+                min_reply_points = 2 if group_sizes[player] == 3 else 1
+                player_scores[player]['reply'] += min_reply_points
+                round_scores[player]['reply'] += min_reply_points
+        
+        # Apply fairness scaling for players in 3-player groups (scale by 4/3)
+        for player, size in group_sizes.items():
+            if size == 3:
+                player_scores[player]['share'] = round(player_scores[player]['share'] * (4/3))
+                player_scores[player]['reply'] = round(player_scores[player]['reply'] * (4/3))
+                round_scores[player]['share'] = round(round_scores[player]['share'] * (4/3))
+                round_scores[player]['reply'] = round(round_scores[player]['reply'] * (4/3))
+        
+        return player_scores, round_scores
     
     def run_game(self):
         """Main loop to run rounds of the game."""
         while True:
-            groups = self.enter_groups()
-            if not groups:
-                print("No groups entered. Exiting game.")
-                break
-            
-            scores = self.enter_scores(groups)
-            player_scores = self.process_scores(scores)
-            self.rounds.append(player_scores)
-            self.display_scoreboard(player_scores)
-            
-            while True:
-                action = input("Enter 'n' to continue to next round, 'e' to edit scores, or 'q' to quit: ")
-                if action == 'e':
-                    scores = self.edit_scores(scores)
-                    player_scores = self.process_scores(scores)
-                    self.display_scoreboard(player_scores)
-                elif action == 'n':
-                    break
-                elif action == 'q':
-                    return
-                else:
-                    print("Invalid input.")
-            
-            new_groups = self.recombine_groups()
-            print("Proposed new groups:")
-            for group in new_groups:
-                print(" ".join(group))
-            
-            approval = input("Enter 'y' to accept or 'm' to manually enter groups: ")
-            if approval == 'm':
-                self.players.clear()
+            if self.rounds:
+                self.previous_groups.append(self.generate_new_groups())
+            else:
                 groups = self.enter_groups()
                 if not groups:
                     print("No groups entered. Exiting game.")
                     break
-            else:
-                groups = new_groups
+            
+            self.initialized = True  # Lock the player set after the first round
+            self.enter_scores()
+            player_scores, round_scores = self.process_scores()
+            self.rounds.append(player_scores)
+            self.display_scoreboard(player_scores)
+            self.display_round_scoreboard(round_scores)
+            
+            action = input("Enter 'n' to continue to next round, 'e' to edit scores, '+' to adjust scores, or 'q' to quit: ")
+            if action == 'e':
+                self.edit_scores()
+                player_scores, round_scores = self.process_scores()
+                self.display_scoreboard(player_scores)
+                self.display_round_scoreboard(round_scores)
+            elif action == '+':
+                self.adjust_scores(player_scores)
+            elif action == 'q':
+                return
             
 if __name__ == "__main__":
     game = Game()
